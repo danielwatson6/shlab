@@ -168,16 +168,29 @@ void eval(char *cmdline)
   char *argv[MAXARGS];
   int runInBackground = parseline(cmdline, argv);
   int isBuiltIn = builtin_cmd(argv);
-
+  struct job_t *job;
   if (!isBuiltIn) {
-  	if (fork() == 0) {
+  	pid_t pid = fork();
+  	if (pid == 0) {
   		// We're in the child
   		execvp(argv[0], argv);
   		printf("%s: Command not found\n", argv[0]);
   		exit(0);
   	}
+
+  	// Add to job list-- background is 2, foreground is 1
+  	addjob(jobs, pid, runInBackground + 1, cmdline);
+
+
   	if (!runInBackground) {
-  		wait(NULL);
+  		// Do not reap the child here. Instead do so after receiving a signal
+  		// i.e. let `sigchild_handler` reap it and use `waitfg` to wait
+  		waitfg(pid);
+  	}
+  	else {
+  		// Background jobs must print the formatted message with the pid, jid, etc
+  		job = getjobpid(jobs, pid);
+  		printf("[%d] (%d) %s", job->jid, job->pid, cmdline);
   	}
   }
 
@@ -273,6 +286,10 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+	struct job_t *job = getjobpid(jobs, pid);
+	while (job->state == FG) {
+		sleep(1);
+	}
     return;
 }
 
@@ -289,6 +306,12 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig)
 {
+	int status;
+	pid_t pid = waitpid(-1, &status, WNOHANG);
+	while (pid > 0) {
+		deletejob(jobs, pid);
+		pid = waitpid(-1, &status, WNOHANG);
+	}
     return;
 }
 
