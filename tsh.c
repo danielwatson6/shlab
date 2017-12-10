@@ -342,8 +342,8 @@ void waitfg(pid_t pid)
 
   //Check if job exists to avoid segfault
   if(job != NULL){
-    //sleep
-    while(pid==fgpid(jobs)){
+    // Sleep
+    while(pid == fgpid(jobs)){
     }
   }
   return;
@@ -497,12 +497,12 @@ int deletejob(struct job_t *jobs, pid_t pid)
 
 /* fgpid - Return PID of current foreground job, 0 if no such job */
 pid_t fgpid(struct job_t *jobs) {
-    int i;
+  int i;
 
-    for (i = 0; i < MAXJOBS; i++)
-	if (jobs[i].state == FG)
-	    return jobs[i].pid;
-    return 0;
+  for (i = 0; i < MAXJOBS; i++) {
+	 if (jobs[i].state == FG) return jobs[i].pid;
+  }
+  return 0;
 }
 
 /* getjobpid  - Find a job (by PID) on the job list */
