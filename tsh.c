@@ -1,8 +1,7 @@
 /*
  * tsh - A tiny shell program with job control
  *
- * Daniel Watson (dw1949)
- * Jonah Joughin (jrj341)
+ * dw1949 + jrj341
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -169,9 +168,30 @@ void eval(char *cmdline)
   char *argv[MAXARGS];
   int runInBackground = parseline(cmdline, argv);
   int isBuiltIn = builtin_cmd(argv);
-
+  struct job_t *job;
   if (!isBuiltIn) {
-    //fork and execute
+  	pid_t pid = fork();
+  	if (pid == 0) {
+  		// We're in the child
+  		execvp(argv[0], argv);
+  		printf("%s: Command not found\n", argv[0]);
+  		exit(0);
+  	}
+
+  	// Add to job list-- background is 2, foreground is 1
+  	addjob(jobs, pid, runInBackground + 1, cmdline);
+
+
+  	if (!runInBackground) {
+  		// Do not reap the child here. Instead do so after receiving a signal
+  		// i.e. let `sigchild_handler` reap it and use `waitfg` to wait
+  		waitfg(pid);
+  	}
+  	else {
+  		// Background jobs must print the formatted message with the pid, jid, etc
+  		job = getjobpid(jobs, pid);
+  		printf("[%d] (%d) %s", job->jid, job->pid, cmdline);
+  	}
   }
 
   return;
@@ -242,11 +262,11 @@ int builtin_cmd(char **argv)
 {
     if (strcmp(argv[0], "quit") == 0) exit(0);
     else if (strcmp(argv[0], "&") == 0) return 1;
-    else if (strcmp(argv[0],"jobs") == 0) {
+    else if (strcmp(argv[0], "jobs") == 0) {
       listjobs(jobs);
       return 1;
     }
-    else if (strcmp(argv[0], "bg") || strcmp(argv[0], "fg")) {
+    else if (strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0) {
       do_bgfg(argv);
       return 1;
     }
@@ -266,6 +286,10 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+	struct job_t *job = getjobpid(jobs, pid);
+	while (job->state == FG) {
+		sleep(1);
+	}
     return;
 }
 
@@ -282,6 +306,12 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig)
 {
+	int status;
+	pid_t pid = waitpid(-1, &status, WNOHANG);
+	while (pid > 0) {
+		deletejob(jobs, pid);
+		pid = waitpid(-1, &status, WNOHANG);
+	}
     return;
 }
 
@@ -292,12 +322,12 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig)
 {
-    pid_t fg = fgpid(jobs);
-    //printf("pid = %jd\n", (intmax_t) fg);
-    if (fg != 0) {
-      kill(-fg, sig);
+    pid_t pid = fgpid(jobs);
+	struct job_t *job = getjobpid(jobs, pid);
+    if (pid != 0) {
+    	printf("Job [%d] (%d) terminated by signal %d\n", job->jid, job->pid, sig);
+        kill(-pid, sig);
     }
-
     return;
 }
 
@@ -308,7 +338,11 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig)
 {
-    return;
+    pid_t pid = fgpid(jobs);
+
+    if (pid != 0) {
+        kill(-pid, sig);
+    }
 }
 
 /*********************
