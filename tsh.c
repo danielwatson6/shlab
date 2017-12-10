@@ -290,6 +290,45 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv)
 {
+    //No argument
+    int runInBackground = (strcmp(argv[0],"bg") == 0) ? 1 : 0;
+    if (argv[1] == NULL) {
+      printf("%s command requires PID or %%jobid argument\n", argv[0]);
+      return;
+    }
+    else if (argv[1][0] != '%' && !isdigit(argv[1][0])) {
+      printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+        return;
+    }
+
+    int isJID = argv[1][0] == '%' ? 1 : 0;
+    struct job_t *job;
+
+    if (isJID) {
+      job = getjobjid(jobs, atoi(&argv[1][1]));
+      if (job == NULL) {
+        printf("%s: No such job\n", argv[1]);
+        return;
+      }
+    } else {
+      job = getjobpid(jobs, atoi(&argv[1][0]));
+      if (job == NULL) {
+        printf("(%d): No such process\n", atoi(argv[1]));
+        return;
+      }
+    }
+
+    if (runInBackground) {
+      job->state = BG;
+      printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+      kill(-(job->pid), SIGCONT);
+    }
+    else {
+      job->state = FG;
+      kill(-job->pid, SIGCONT);
+      waitfg(job->pid);
+    }
+
     return;
 }
 
@@ -298,9 +337,9 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+  struct job_t *job = getjobpid(jobs, pid);
   if (pid == 0) return;
 
-	struct job_t *job = getjobpid(jobs, pid);
   //Check if job exists to avoid segfault
   if(job != NULL){
     //sleep
@@ -327,7 +366,7 @@ void sigchld_handler(int sig)
   //Get pid and pid status
   //WNOHANG option prevents parent from waiting
   //WUNTRACED option includes status information for stopped processes
-	pid_t
+	pid_t pid;
   struct job_t *job;
 
 	while ((pid = waitpid(fgpid(jobs), &status, WNOHANG|WUNTRACED)) > 0) {
@@ -358,7 +397,6 @@ void sigint_handler(int sig)
 {
     pid_t pid = fgpid(jobs);
     if (pid != 0) {
-    	printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, sig);
       kill(-pid, sig);
     }
     return;
