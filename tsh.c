@@ -170,7 +170,9 @@ void eval(char *cmdline)
   int runInBackground = parseline(cmdline, argv);
   int isBuiltIn = builtin_cmd(argv);
 
-  if (!isBuiltIn)
+  if (!isBuiltIn) {
+    //fork and execute
+  }
 
   return;
 }
@@ -290,6 +292,12 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig)
 {
+    pid_t fg = fgpid(jobs);
+    //printf("pid = %jd\n", (intmax_t) fg);
+    if (fg != 0) {
+      kill(-fg, sig);
+    }
+
     return;
 }
 
