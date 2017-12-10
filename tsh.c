@@ -1,8 +1,7 @@
 /*
  * tsh - A tiny shell program with job control
  *
- * Daniel Watson (dw1949)
- * Jonah Joughin (jrj341)
+ * dw1949 + jrj341
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -170,7 +169,17 @@ void eval(char *cmdline)
   int runInBackground = parseline(cmdline, argv);
   int isBuiltIn = builtin_cmd(argv);
 
-  if (!isBuiltIn)
+  if (!isBuiltIn) {
+  	if (fork() == 0) {
+  		// We're in the child
+  		execvp(argv[0], argv);
+  		printf("%s: Command not found\n", argv[0]);
+  		exit(0);
+  	}
+  	if (!runInBackground) {
+  		wait(NULL);
+  	}
+  }
 
   return;
 }
@@ -244,7 +253,7 @@ int builtin_cmd(char **argv)
       listjobs(jobs);
       return 1;
     }
-    else if (strcmp(argv[0], "bg") || strcmp(argv[0], "fg")) {
+    else if (strcmp(argv[0], "bg") == 0 || strcmp(argv[0], "fg") == 0) {
       do_bgfg(argv);
       return 1;
     }
@@ -290,7 +299,12 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig)
 {
-    return;
+    pid_t pid = fgpid(jobs);
+
+    if (pid != 0) {
+        printf("%d\n", sig);
+        kill(-pid, sig);
+    }
 }
 
 /*
@@ -300,7 +314,11 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig)
 {
-    return;
+    pid_t pid = fgpid(jobs);
+
+    if (pid != 0) {
+        kill(-pid, sig);
+    }
 }
 
 /*********************
