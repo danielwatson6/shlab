@@ -1,7 +1,8 @@
 /* 
  * tsh - A tiny shell program with job control
  * 
- * <Put your name and login ID here>
+ * Daniel Watson (dw1949)
+ * Jonah Joughin (jrj341)
  */
 #include <stdio.h>
 #include <stdlib.h>
