@@ -85,6 +85,7 @@ void app_error(char *msg);
 typedef void handler_t(int);
 handler_t *Signal(int signum, handler_t *handler);
 
+
 /*
  * main - The shell's main routine
  */
@@ -168,30 +169,41 @@ void eval(char *cmdline)
   char *argv[MAXARGS];
   int runInBackground = parseline(cmdline, argv);
   int isBuiltIn = builtin_cmd(argv);
-  struct job_t *job;
+  //Signal mask
+  //Represents set of signals
+  sigset_t mask;
+
   if (!isBuiltIn) {
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    //Block SIGCHLD signals
+    sigprocmask(SIG_BLOCK, &mask, NULL);
+
   	pid_t pid = fork();
+
+    //Child Fork
   	if (pid == 0) {
-  		// We're in the child
-  		execvp(argv[0], argv);
-  		printf("%s: Command not found\n", argv[0]);
-  		exit(0);
+      //Create new process group
+      setpgid(0,0);
+      //Unblock SIGCHLD signals after fork
+      sigprocmask(SIG_UNBLOCK, &mask, NULL);
+      //Error catch on execution failure
+      if (execvp(argv[0], argv) < 0) {
+        printf("%s: Command not found\n", argv[0]);
+    		exit(0);
+      }
   	}
 
-  	// Add to job list-- background is 2, foreground is 1
+    //Parent
   	addjob(jobs, pid, runInBackground + 1, cmdline);
+    sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
-
-  	if (!runInBackground) {
-  		// Do not reap the child here. Instead do so after receiving a signal
-  		// i.e. let `sigchild_handler` reap it and use `waitfg` to wait
-  		waitfg(pid);
-  	}
-  	else {
-  		// Background jobs must print the formatted message with the pid, jid, etc
-  		job = getjobpid(jobs, pid);
-  		printf("[%d] (%d) %s", job->jid, job->pid, cmdline);
-  	}
+    // Do not reap the child here. Instead do so after receiving a signal
+    // i.e. let `sigchild_handler` reap it and use `waitfg` to wait
+  	if (!runInBackground) waitfg(pid);
+    // Background jobs must print the formatted message with the pid, jid, etc
+  	else printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
   }
 
   return;
@@ -286,11 +298,16 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+  if (pid == 0) return;
+
 	struct job_t *job = getjobpid(jobs, pid);
-	while (job->state == FG) {
-		sleep(1);
-	}
-    return;
+  //Check if job exists to avoid segfault
+  if(job != NULL){
+    //sleep
+    while(pid==fgpid(jobs)){
+    }
+  }
+  return;
 }
 
 /*****************
@@ -323,10 +340,9 @@ void sigchld_handler(int sig)
 void sigint_handler(int sig)
 {
     pid_t pid = fgpid(jobs);
-	struct job_t *job = getjobpid(jobs, pid);
     if (pid != 0) {
-    	printf("Job [%d] (%d) terminated by signal %d\n", job->jid, job->pid, sig);
-        kill(-pid, sig);
+    	printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, sig);
+      kill(-pid, sig);
     }
     return;
 }
@@ -339,10 +355,11 @@ void sigint_handler(int sig)
 void sigtstp_handler(int sig)
 {
     pid_t pid = fgpid(jobs);
-
     if (pid != 0) {
-        kill(-pid, sig);
+      printf("Job [%d] (%d) stopped by signal %d\n", pid2jid(pid), pid, sig);
+      kill(-pid, sig);
     }
+    return;
 }
 
 /*********************
