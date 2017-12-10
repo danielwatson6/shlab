@@ -324,12 +324,29 @@ void waitfg(pid_t pid)
 void sigchld_handler(int sig)
 {
 	int status;
-	pid_t pid = waitpid(-1, &status, WNOHANG);
-	while (pid > 0) {
-		deletejob(jobs, pid);
-		pid = waitpid(-1, &status, WNOHANG);
+  //Get pid and pid status
+  //WNOHANG option prevents parent from waiting
+  //WUNTRACED option includes status information for stopped processes
+	pid_t
+  struct job_t *job;
+
+	while ((pid = waitpid(fgpid(jobs), &status, WNOHANG|WUNTRACED)) > 0) {
+
+    job = getjobpid(jobs, pid);
+    if (WIFSTOPPED(status)) {
+      job->state = ST;
+      printf("Job [%d] (%d) Stopped by signal %d\n", job->jid, pid, WSTOPSIG(status));
+    }
+
+    else if (WIFSIGNALED(status)) {
+      printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, WTERMSIG(status));
+      deletejob(jobs, pid);
+    }
+    else if (WIFEXITED(status)){
+      deletejob(jobs, pid);
+    }
 	}
-    return;
+  return;
 }
 
 /*
@@ -356,7 +373,6 @@ void sigtstp_handler(int sig)
 {
     pid_t pid = fgpid(jobs);
     if (pid != 0) {
-      printf("Job [%d] (%d) stopped by signal %d\n", pid2jid(pid), pid, sig);
       kill(-pid, sig);
     }
     return;
