@@ -86,6 +86,19 @@ void app_error(char *msg);
 typedef void handler_t(int);
 handler_t *Signal(int signum, handler_t *handler);
 
+/*
+ * Wrappers to check return value of system calls
+ */
+
+pid_t fork_safe();
+void kill_safe(pid_t pid, int sig);
+void setpgrp_safe();
+
+void sigemptyset_safe(sigset_t *set);
+void sigaddset_safe(sigset_t *set, int sig);
+void sigprocmask_safe(int how, const sigset_t *set, sigset_t *oldset);
+
+void execvp_safe(const char *file, char *const argv[]);
 
 /*
  * main - The shell's main routine
@@ -169,36 +182,40 @@ void eval(char *cmdline)
 {
     char *argv[MAXARGS];
     int runInBackground = parseline(cmdline, argv);
+
+    // Do nothing if argv is empty
+    if (argv[0] == NULL) return;
+    //Checks if command is built in and runs if so
     int isBuiltIn = builtin_cmd(argv);
-    //Signal mask
-    //Represents set of signals
+
+    // Represents set of signals used for signal blocking/unblocking
     sigset_t mask;
 
+    //Runs executables
     if (!isBuiltIn) {
 
-        sigemptyset(&mask);
-        sigaddset(&mask, SIGCHLD);
-        //Block SIGCHLD signals
-        sigprocmask(SIG_BLOCK, &mask, NULL);
+        //Block SIGCHLD signals (wrapped for error checking)
+        sigemptyset_safe(&mask);
+        sigaddset_safe(&mask, SIGCHLD);
+        sigprocmask_safe(SIG_BLOCK, &mask, NULL);
 
-        pid_t pid = fork();
+        //Create child process (wrapped for error checking)
+        pid_t pid = fork_safe();
 
-        //Child Fork
+        //Run by Child Fork
         if (pid == 0) {
-            //Create new process group
-            setpgid(0,0);
-            //Unblock SIGCHLD signals after fork
-            sigprocmask(SIG_UNBLOCK, &mask, NULL);
-            //Error catch on execution failure
-            if (execvp(argv[0], argv) < 0) {
-                printf("%s: Command not found\n", argv[0]);
-                exit(0);
-            }
+            //Child create new process group (wrapped for error checking)
+            setpgrp_safe();
+            //Unblock SIGCHLD signals after fork (wrapped for error checking)
+            sigprocmask_safe(SIG_UNBLOCK, &mask, NULL);
+            //Run executable and catch on execution failure (wrapped for error checking)
+            execvp_safe(argv[0], argv);
         }
 
-        //Parent
+        //Run by Parent
         addjob(jobs, pid, runInBackground + 1, cmdline);
-        sigprocmask(SIG_UNBLOCK, &mask, NULL);
+        //Unblock SIGCHLD signals after fork (wrapped for error checking)
+        sigprocmask_safe(SIG_UNBLOCK, &mask, NULL);
 
         // Do not reap the child here. Instead do so after receiving a signal
         // i.e. let `sigchild_handler` reap it and use `waitfg` to wait
@@ -273,6 +290,7 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv)
 {
+    //Built in command handlers
     if (strcmp(argv[0], "quit") == 0) exit(0);
     else if (strcmp(argv[0], "&") == 0) return 1;
     else if (strcmp(argv[0], "jobs") == 0) {
@@ -291,7 +309,7 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv)
 {
-    //Run in background or foreground
+    //Should command run in background or foreground
     int runInBackground = (strcmp(argv[0],"bg") == 0) ? 1 : 0;
 
     //Check for existence of paramter
@@ -299,12 +317,12 @@ void do_bgfg(char **argv)
         printf("%s command requires PID or %%jobid argument\n", argv[0]);
         return;
     }
-    //Check for formatting 
+    //Check for formatting (e.g. %1 or 1)
     else if (argv[1][0] != '%' && !isdigit(argv[1][0])) {
         printf("%s: argument must be a PID or %%jobid\n", argv[0]);
         return;
     }
-
+    //Check whether user inputs JID or PID
     int isJID = argv[1][0] == '%' ? 1 : 0;
     struct job_t *job;
 
@@ -321,15 +339,16 @@ void do_bgfg(char **argv)
             return;
         }
     }
-
+    //Background handler
     if (runInBackground) {
         job->state = BG;
         printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
-        kill(-(job->pid), SIGCONT);
+        kill_safe(-(job->pid), SIGCONT);
     }
+    //Foreground handler
     else {
         job->state = FG;
-        kill(-job->pid, SIGCONT);
+        kill_safe(-job->pid, SIGCONT);
         waitfg(job->pid);
     }
 
@@ -347,8 +366,7 @@ void waitfg(pid_t pid)
     //Check if job exists to avoid segfault
     if(job != NULL) {
         // Sleep
-        while(pid == fgpid(jobs)) {
-        }
+        while(pid == fgpid(jobs)) sleep(1);
     }
     return;
 }
@@ -367,24 +385,27 @@ void waitfg(pid_t pid)
 void sigchld_handler(int sig)
 {
     int status;
-    //Get pid and pid status
-    //WNOHANG option prevents parent from waiting
-    //WUNTRACED option includes status information for stopped processes
+
     pid_t pid;
     struct job_t *job;
 
+    //Reap children
+    //WNOHANG option prevents parent from waiting
+    //WUNTRACED option includes status information for stopped processes
     while ((pid = waitpid(fgpid(jobs), &status, WNOHANG|WUNTRACED)) > 0) {
 
         job = getjobpid(jobs, pid);
+        //If pid is stopped, set job state to stopped and print message
         if (WIFSTOPPED(status)) {
             job->state = ST;
             printf("Job [%d] (%d) Stopped by signal %d\n", job->jid, pid, WSTOPSIG(status));
         }
-
+        //If pid is terminated, delete job and print message
         else if (WIFSIGNALED(status)) {
             printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, WTERMSIG(status));
             deletejob(jobs, pid);
         }
+        //If pid exits, delete job
         else if (WIFEXITED(status)) {
             deletejob(jobs, pid);
         }
@@ -400,9 +421,8 @@ void sigchld_handler(int sig)
 void sigint_handler(int sig)
 {
     pid_t pid = fgpid(jobs);
-    if (pid != 0) {
-        kill(-pid, sig);
-    }
+    //Forward signal to foreground
+    if (pid != 0) kill_safe(-pid, sig);
     return;
 }
 
@@ -414,9 +434,8 @@ void sigint_handler(int sig)
 void sigtstp_handler(int sig)
 {
     pid_t pid = fgpid(jobs);
-    if (pid != 0) {
-        kill(-pid, sig);
-    }
+    //Forward signal to foreground
+    if (pid != 0) kill_safe(-pid, sig);
     return;
 }
 
@@ -637,4 +656,36 @@ void sigquit_handler(int sig)
 {
     printf("Terminating after receipt of SIGQUIT signal\n");
     exit(1);
+}
+
+/*
+ * Wrappers to check return values of system calls
+ * Throw errors if return value < 0, indicating an error
+ */
+
+pid_t fork_safe() {
+  pid_t pid = fork();
+  if (pid < 0) unix_error("Fork error");
+  return pid;
+}
+void kill_safe(pid_t pid, int sig) {
+  if (kill(pid, sig) < 0) unix_error("Kill error");
+}
+void setpgrp_safe() {
+  if (setpgrp() < 0) unix_error("Setpgrp error");
+}
+void sigemptyset_safe(sigset_t *set){
+  if (sigemptyset(set) < 0) app_error("Sigemptyset error");
+}
+void sigaddset_safe(sigset_t *set, int sig) {
+  if (sigaddset(set, sig) < 0) app_error("Sigaddset error");
+}
+void sigprocmask_safe(int how, const sigset_t *set, sigset_t *oldset) {
+  if (sigprocmask(how, set, oldset) < 0) app_error("Sigprocmask error");
+}
+void execvp_safe(const char *file, char *const argv[]) {
+  if (execvp(file, argv) < 0) {
+      printf("%s: Command not found\n", argv[0]);
+      exit(1);
+  }
 }
